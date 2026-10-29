@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -17,7 +18,7 @@ app.use(express.json());
 // MongoDB
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ MongoDB connected'))
-    .catch(err => console.error(err));
+    .catch(err => console.error('MongoDB connection error:', err.message));
 
 // 🚀 Routes
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -52,8 +53,39 @@ app.use((req, res, next) => {
 const errorHandler = require('./middleware/errorHandler');
 app.use(errorHandler);
 
+// Helper to spawn Python ML Prediction microservice
+let pythonProcess = null;
+function startPythonMLService() {
+    if (process.env.AUTO_START_ML_SERVICE === 'false') return;
+
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const scriptPath = path.join(__dirname, '..', 'ml', 'service.py');
+
+    try {
+        console.log(`[Server] Spawning Python ML Service on port 5001...`);
+        pythonProcess = spawn(pythonCmd, [scriptPath, '--server', '--port', '5001'], {
+            stdio: 'pipe',
+            detached: false,
+        });
+
+        pythonProcess.stdout.on('data', (d) => console.log(`[Python ML] ${d.toString().trim()}`));
+        pythonProcess.stderr.on('data', (d) => console.error(`[Python ML Err] ${d.toString().trim()}`));
+
+        pythonProcess.on('error', (err) => {
+            console.warn(`[Server] Could not spawn Python ML service: ${err.message}. Backend will use CLI/fallback mode.`);
+        });
+
+        process.on('exit', () => {
+            if (pythonProcess) pythonProcess.kill();
+        });
+    } catch (e) {
+        console.warn(`[Server] Python auto-spawn failed (${e.message}). Express will connect via CLI or fallback.`);
+    }
+}
+
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
+    startPythonMLService();
 });

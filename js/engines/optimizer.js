@@ -12,22 +12,54 @@ function toNumber(value, fallback = 0) {
     return Number.isFinite(num) ? num : fallback;
 }
 
-function safeName(list, id, fallback = 'Unknown') {
-    return list.find(item => item.id === id)?.name || fallback;
+export function resolvePortId(val) {
+    if (!val) return '';
+    const s = String(val).trim().toLowerCase();
+    const port = PORTS.find(p => p.id.toLowerCase() === s || p.name.toLowerCase() === s || s.includes(p.id.toLowerCase()) || p.name.toLowerCase().includes(s));
+    return port ? port.id : '';
+}
+
+export function resolvePlantId(val) {
+    if (!val) return '';
+    const s = String(val).trim().toLowerCase();
+    const plant = PLANTS.find(p => p.id.toLowerCase() === s || p.name.toLowerCase() === s || s.includes(p.id.toLowerCase()) || p.name.toLowerCase().includes(s));
+    return plant ? plant.id : '';
+}
+
+export function safePortName(id, fallback = 'Unknown Port') {
+    if (!id) return fallback;
+    const s = String(id).trim().toLowerCase();
+    const port = PORTS.find(p => p.id.toLowerCase() === s || p.name.toLowerCase() === s || s.includes(p.id.toLowerCase()) || p.name.toLowerCase().includes(s));
+    return port ? port.name : fallback;
+}
+
+export function safePlantName(id, fallback = 'Unknown Plant') {
+    if (!id) return fallback;
+    const s = String(id).trim().toLowerCase();
+    const plant = PLANTS.find(p => p.id.toLowerCase() === s || p.name.toLowerCase() === s || s.includes(p.id.toLowerCase()) || p.name.toLowerCase().includes(s));
+    return plant ? plant.name : fallback;
+}
+
+export function safeName(list, id, fallback = 'Unknown') {
+    if (!id) return fallback;
+    const s = String(id).trim().toLowerCase();
+    const match = list.find(item => item.id?.toLowerCase() === s || item.name?.toLowerCase() === s || (item.id && s.includes(item.id.toLowerCase())));
+    return match?.name || fallback;
 }
 
 function normalizeVessel(vessel, index) {
     const id = vessel.id || vessel.vesselId || `vessel_${index}`;
+    const destinationPort = resolvePortId(vessel.destinationPort || vessel.portId || vessel.fromPort) || vessel.destinationPort || vessel.portId || 'paradip';
     return {
         ...vessel,
         id,
         vesselId: vessel.vesselId || id,
         name: vessel.name || vessel.vesselName || `Vessel ${index + 1}`,
-        destinationPort: vessel.destinationPort || vessel.portId || vessel.fromPort || '',
-        destinationPortName: vessel.destinationPortName || vessel.portName || safeName(PORTS, vessel.destinationPort || vessel.portId, 'Unknown Port'),
+        destinationPort,
+        destinationPortName: vessel.destinationPortName || safePortName(destinationPort, 'Paradip Port'),
         material: vessel.material || 'coal',
         materialName: vessel.materialName || safeName(MATERIALS, vessel.material || 'coal', 'Coking Coal'),
-        quantity: toNumber(vessel.quantity, 0),
+        quantity: toNumber(vessel.quantity, 30000),
         freightCost: toNumber(vessel.freightCost || vessel.cost || 0, 0),
         delayHours: toNumber(vessel.delayHours, 0),
         demurrageDays: toNumber(vessel.demurrageDays, 0),
@@ -39,19 +71,37 @@ function normalizeVessel(vessel, index) {
 
 function normalizeRouteCandidate(candidate, index) {
     const rawRoute = candidate.route || candidate;
-    const fromPort = rawRoute.fromPort || rawRoute.from || rawRoute.portId || rawRoute.sourcePort || rawRoute.originPort || '';
-    const toPlant = rawRoute.toPlant || rawRoute.to || rawRoute.plantId || rawRoute.destinationPlant || '';
-    const distance = toNumber(rawRoute.distance || rawRoute.km || rawRoute.routeDistance, 0);
-    const costPerTonKm = toNumber(rawRoute.costPerTonKm || rawRoute.costPerDistance || rawRoute.ratePerKm || rawRoute.rate, 0);
-    const avgTime = toNumber(rawRoute.avgTime || rawRoute.time || rawRoute.transitHours || rawRoute.durationHours, 0);
+    let fromPort = resolvePortId(rawRoute.fromPort || rawRoute.from || rawRoute.portId || rawRoute.sourcePort || rawRoute.originPort || rawRoute.fromPortName);
+    let toPlant = resolvePlantId(rawRoute.toPlant || rawRoute.to || rawRoute.plantId || rawRoute.destinationPlant || rawRoute.targetPlant || rawRoute.toPlantName);
+
+    // Look up default rail route if available
+    const standardRoute = RAIL_ROUTES.find(r => r.from === fromPort && r.to === toPlant)
+        || RAIL_ROUTES.find(r => r.from === fromPort)
+        || RAIL_ROUTES[0];
+
+    if (!fromPort && standardRoute) fromPort = standardRoute.from;
+    if (!toPlant && standardRoute) toPlant = standardRoute.to;
+
+    let distance = toNumber(rawRoute.distance || rawRoute.km || rawRoute.routeDistance, standardRoute?.distance || 680);
+    if (distance <= 0 && standardRoute) distance = standardRoute.distance;
+
+    let costPerTonKm = toNumber(rawRoute.costPerTonKm || rawRoute.costPerDistance || rawRoute.ratePerKm || rawRoute.rate, standardRoute?.costPerTonKm || 1.8);
+    if (costPerTonKm <= 0 && standardRoute) costPerTonKm = standardRoute.costPerTonKm;
+
+    let avgTime = toNumber(rawRoute.avgTime || rawRoute.time || rawRoute.transitHours || rawRoute.durationHours, standardRoute?.avgTime || 28);
+    if (avgTime <= 0 && standardRoute) avgTime = standardRoute.avgTime;
+
     const capacity = toNumber(rawRoute.maxCapacity || rawRoute.capacity || rawRoute.quantity || rawRoute.rakes || COST_PARAMS.rakeCapacity, COST_PARAMS.rakeCapacity);
     const quantity = toNumber(rawRoute.quantity || rawRoute.capacity || capacity, capacity);
-    const baseCost = toNumber(rawRoute.totalCost || rawRoute.cost || 0, 0);
-    const routeId = rawRoute.routeId || rawRoute.rakeNumber || rawRoute.id || candidate.routeId || candidate.rakeNumber || `route_${index + 1}`;
-    const material = rawRoute.material || rawRoute.materialId || candidate.material || '';
-    const unitCost = baseCost > 0 && quantity > 0
+    
+    let baseCost = toNumber(rawRoute.totalCost || rawRoute.cost || rawRoute.railCost, 0);
+    let unitCost = baseCost > 0 && quantity > 0
         ? baseCost / quantity
-        : (costPerTonKm > 0 && distance > 0 ? costPerTonKm * distance : 0);
+        : (costPerTonKm > 0 && distance > 0 ? costPerTonKm * distance : 1.8 * distance);
+    if (baseCost <= 0) baseCost = Math.round(unitCost * quantity);
+
+    const routeId = rawRoute.routeId || rawRoute.rakeNumber || rawRoute.id || candidate.routeId || candidate.rakeNumber || `route_${index + 1}`;
+    const material = rawRoute.material || rawRoute.materialId || candidate.material || 'coal';
 
     return {
         ...candidate,
@@ -61,8 +111,8 @@ function normalizeRouteCandidate(candidate, index) {
         rakeNumber: candidate.rakeNumber || routeId,
         fromPort,
         toPlant,
-        fromPortName: rawRoute.fromPortName || safeName(PORTS, fromPort, fromPort || 'Unknown Port'),
-        toPlantName: rawRoute.toPlantName || safeName(PLANTS, toPlant, toPlant || 'Unknown Plant'),
+        fromPortName: safePortName(fromPort, rawRoute.fromPortName || 'Paradip Port'),
+        toPlantName: safePlantName(toPlant, rawRoute.toPlantName || 'Bhilai Steel Plant'),
         distance,
         costPerTonKm,
         avgTime,
@@ -111,14 +161,18 @@ function buildRoutePool(routeCandidates = [], rakeCandidates = [], nodes = []) {
             ...candidate,
             sourceType: candidate.sourceType || (candidate.route ? 'route' : 'rake'),
         }, index);
+        if (!route.fromPort || !route.toPlant || route.distance <= 0) return;
         const key = `${route.fromPort}|${route.toPlant}|${route.routeId}`;
         if (seen.has(key)) return;
         seen.add(key);
         normalized.push(route);
     });
 
-    if (normalized.length === 0) {
-        RAIL_ROUTES.forEach((route, index) => {
+    // Ensure all standard RAIL_ROUTES corridors are always available
+    RAIL_ROUTES.forEach((route, index) => {
+        const staticKey = `${route.from}|${route.to}`;
+        if (!seen.has(staticKey)) {
+            seen.add(staticKey);
             normalized.push(normalizeRouteCandidate({
                 id: `${route.from}_${route.to}_${index}`,
                 routeId: `STATIC-${index + 1}`,
@@ -132,8 +186,8 @@ function buildRoutePool(routeCandidates = [], rakeCandidates = [], nodes = []) {
                 nodes,
                 sourceType: 'static_route',
             }, index));
-        });
-    }
+        }
+    });
 
     return normalized;
 }
@@ -182,7 +236,7 @@ function scoreRouteCandidate(route, vessel, inventory, dynamicConstraints = {}) 
 
     const unitRailCost = route.unitCost > 0
         ? route.unitCost
-        : (route.costPerTonKm > 0 && route.distance > 0 ? route.costPerTonKm * route.distance : 0);
+        : (route.costPerTonKm > 0 && route.distance > 0 ? route.costPerTonKm * route.distance : 1200);
     const railCost = unitRailCost * vessel.quantity;
     const requiredRakes = Math.max(1, Math.ceil(vessel.quantity / COST_PARAMS.rakeCapacity));
     const capacityPenalty = vessel.quantity > route.capacity
@@ -208,8 +262,8 @@ function scoreRouteCandidate(route, vessel, inventory, dynamicConstraints = {}) 
     const portCap = toNumber(dynamicConstraints.portCapacityFactor, 1.0);
     const rakeAvail = toNumber(dynamicConstraints.rakeAvailabilityFactor, 1.0);
     
-    const availabilityPenalty = (route.available && rakeAvail > 0) ? 0 : railCost * 5.0; // Heavy penalty for unavailable routes
-    const portClosurePenalty = (portCap <= 0 && route.fromPort) ? railCost * 10.0 : 0; // Extreme penalty for closed ports
+    const availabilityPenalty = (route.available && rakeAvail > 0) ? 0 : railCost * 5.0;
+    const portClosurePenalty = (portCap <= 0 && route.fromPort) ? railCost * 10.0 : 0;
     const capacityTightnessPenalty = (1 - portCap) * railCost * 0.5 + (1 - rakeAvail) * railCost * 0.5;
 
     const demandBonus = demandPressure * railCost * 0.12;
@@ -256,25 +310,31 @@ function chooseBestRoutes(vessels, routePool, inventory, dynamicConstraints = {}
         const candidateSet = (matchingRoutes.length > 0 ? matchingRoutes : routePool).map(route => ({
             ...route,
             toPlant: route.toPlant || targetPlant.id,
-            toPlantName: route.toPlantName || safeName(PLANTS, route.toPlant || targetPlant.id, targetPlant.name),
+            toPlantName: route.toPlantName || safePlantName(route.toPlant || targetPlant.id, targetPlant.name),
         }));
 
         const scoredRoutes = candidateSet
             .map(route => scoreRouteCandidate(route, vessel, inventory, dynamicConstraints))
             .sort((a, b) => a.score - b.score);
 
+        const standardFallback = RAIL_ROUTES.find(r => r.from === (vessel.destinationPort || 'paradip') && r.to === targetPlant.id)
+            || RAIL_ROUTES.find(r => r.from === (vessel.destinationPort || 'paradip'))
+            || RAIL_ROUTES[0];
+
         const selectedRoute = scoredRoutes[0] || scoreRouteCandidate({
             id: `fallback-${vessel.id}`,
             routeId: `FALLBACK-${vessel.id}`,
-            fromPort: vessel.destinationPort,
-            toPlant: targetPlant.id,
-            fromPortName: vessel.destinationPortName || safeName(PORTS, vessel.destinationPort, 'Unknown Port'),
-            toPlantName: targetPlant.name,
-            distance: 0,
-            costPerTonKm: 0,
-            avgTime: 0,
+            fromPort: standardFallback.from,
+            toPlant: standardFallback.to,
+            fromPortName: safePortName(standardFallback.from, 'Paradip Port'),
+            toPlantName: safePlantName(standardFallback.to, targetPlant.name),
+            distance: standardFallback.distance,
+            costPerTonKm: standardFallback.costPerTonKm,
+            avgTime: standardFallback.avgTime,
             capacity: COST_PARAMS.rakeCapacity * COST_PARAMS.maxRakesPerDay,
-            quantity: vessel.quantity,
+            quantity: vessel.quantity || 30000,
+            baseCost: Math.round(standardFallback.distance * standardFallback.costPerTonKm * (vessel.quantity || 30000)),
+            unitCost: standardFallback.distance * standardFallback.costPerTonKm,
             sourceType: 'fallback',
             available: true,
         }, vessel, inventory, dynamicConstraints);
@@ -371,7 +431,7 @@ function chooseBestRoutes(vessels, routePool, inventory, dynamicConstraints = {}
             name: vessel.name,
             vesselId: vessel.id,
             destinationPort: vessel.destinationPort,
-            destinationPortName: vessel.destinationPortName || safeName(PORTS, vessel.destinationPort, 'Unknown Port'),
+            destinationPortName: vessel.destinationPortName || safePortName(vessel.destinationPort, 'Paradip Port'),
             targetPlant: targetPlant.name,
             targetPlantId: targetPlant.id,
             routeId: selectedRoute.routeId,
@@ -410,9 +470,9 @@ function buildEnterpriseOptimizationResult(vessels, candidates, inventory, dynam
     const routePool = buildRoutePool(routeCandidates, candidates || [], nodeCandidates);
     const { vesselSchedule, railPlan, routeHistory, totals } = chooseBestRoutes(normalizedVessels, routePool, normalizedInventory, dynamicConstraints);
 
-    // --- 🟢 Dynamic Logistics Mathematician Model ---
+    // --- Dynamic Logistics Mathematician Model ---
     const totalTonnage = (vesselSchedule || []).reduce((sum, v) => sum + toNumber(v.quantity, 0), 0) || 1;
-    const avgTransportCost = Math.round(totals.railTransport / totalTonnage) || 1200; // Base: INR 1,200/ton baseline transport cost
+    const avgTransportCost = Math.round(totals.railTransport / totalTonnage) || 1200;
     
     // ML-Derived Risk Multiplier (M_risk)
     const mRisk = 2.5 + 
@@ -436,7 +496,6 @@ function buildEnterpriseOptimizationResult(vessels, candidates, inventory, dynam
             
             if (endBalance < safetyStock) {
                 const deficit = safetyStock - endBalance;
-                // Penalize shortfall: Deficit * (AvgCost * M_risk)
                 shortfallPenalties += Math.round(deficit * (avgTransportCost * mRisk));
             }
         }
@@ -542,91 +601,76 @@ function buildModel(vessels, rakes, inventory, dynamicConstraints = {}) {
     const monsoonMultiplier = mlConstraints.monsoonPenalty || 1.0;
     const weatherRisk = mlConstraints.weatherRiskFactor || 1.0;
 
-    // ── Decision Variables ─────────────────────────────────────
-    
     // For each vessel: prioritize berth assignment
     vessels.forEach((v, i) => {
-    const varName = `berth_${i}`;
-    const port = PORTS.find(p => p.id === v.destinationPort);
-    const portHandling = port?.handlingCost || 320;
+        const varName = `berth_${i}`;
+        const port = PORTS.find(p => p.id === v.destinationPort);
+        const portHandling = port?.handlingCost || 320;
 
-    let mlDelay = 0;
-    if (predictor && predictor.trained) {
-        try {
-            mlDelay = predictor.predictVesselDelay(v).predictedDelay || 0;
-        } catch {
+        let mlDelay = 0;
+        if (predictor && predictor.trained) {
+            try {
+                mlDelay = predictor.predictVesselDelay(v).predictedDelay || 0;
+            } catch {
+                mlDelay = v.delayHours || 0;
+            }
+        } else {
             mlDelay = v.delayHours || 0;
         }
-    } else {
-        mlDelay = v.delayHours || 0;
-    }
 
         const demurrageCost =
-        Math.max(0, (v.demurrageDays || 0) + mlDelay / 24) *
-        COST_PARAMS.demurragePerDay *
-        COST_PARAMS.usdToInr *
-        delayPenaltyMultiplier;
+            Math.max(0, (v.demurrageDays || 0) + mlDelay / 24) *
+            COST_PARAMS.demurragePerDay *
+            COST_PARAMS.usdToInr *
+            delayPenaltyMultiplier;
 
-    model.variables[varName] = {
-        cost: portHandling * v.quantity + demurrageCost,
-        [`assign_vessel_${i}`]: 1,
-        [`port_${v.destinationPort}_berth`]: 1,
-        [`material_${v.material}_supply`]: v.quantity,
-        total_handled: v.quantity,
-    };
+        model.variables[varName] = {
+            cost: portHandling * v.quantity + demurrageCost,
+            [`assign_vessel_${i}`]: 1,
+            [`port_${v.destinationPort}_berth`]: 1,
+            [`material_${v.material}_supply`]: v.quantity,
+            total_handled: v.quantity,
+        };
 
-    // ✅ HARD constraint: must assign
-    model.constraints[`assign_vessel_${i}`] = { equal: 1 };
-    model.ints[varName] = 1;
-});
+        model.constraints[`assign_vessel_${i}`] = { equal: 1 };
+        model.ints[varName] = 1;
+    });
 
     // For each rake route: how much to transport
     rakes.forEach((r, i) => {
         const varName = `rail_${i}`;
         
-        // ML Integration: Predict train delay to adjust effective capacity
         let mlTrainDelay = 0;
         try {
             const pred = predictor.predictTrainDelay(r);
             mlTrainDelay = pred.predictedDelay || 0;
         } catch (e) {}
 
-        const capacityReduction = mlTrainDelay > 4 ? 0.7 : 1.0; // Reduce by 30% if high delay predicted
+        const capacityReduction = mlTrainDelay > 4 ? 0.7 : 1.0;
         const effectiveCapacity = r.quantity * capacityReduction * rakeAvailabilityFactor;
 
         model.variables[varName] = {
-            cost: r.totalCost * (mlTrainDelay > 4 ? 1.2 : 1.0), // Penalty for high delay
+            cost: r.totalCost * (mlTrainDelay > 4 ? 1.2 : 1.0),
             [`route_${r.fromPort}_${r.toPlant}_cap`]: effectiveCapacity,
             [`plant_${r.toPlant}_${r.material}_recv`]: r.quantity,
             total_railed: r.quantity,
         };
     });
 
-    // ── Constraints ───────────────────────────────────────────
-
-    // Demand spike multipliers per-plant (optional)
-    const demandSpikeMap = dynamicConstraints.demandSpike || {};
-
-    // Port berth capacity constraints with dynamic scaling
     for (const port of PORTS) {
-        // Congestion signal: derived from vessels heading to this port
         const congestionSignal = vessels.filter(v => v.destinationPort === port.id).length / (port.berths * 2);
-        // Fix: Allow 0 berths if portCapacityFactor is 0 (Port Closure)
         const scaledBerths = portCapacityFactor <= 0 ? 0 : Math.max(1, Math.floor(port.berths * portCapacityFactor * (1 - Math.min(0.5, congestionSignal))));
-        
         model.constraints[`port_${port.id}_berth`] = { max: scaledBerths };
     }
 
-    // Rail capacity per route per day
     for (const route of RAIL_ROUTES) {
         model.constraints[`route_${route.from}_${route.to}_cap`] = {
             max: COST_PARAMS.rakeCapacity * COST_PARAMS.maxRakesPerDay * rakeAvailabilityFactor,
         };
     }
 
-    // Plant demand satisfaction — now respects dynamic demand spikes
+    const demandSpikeMap = dynamicConstraints.demandSpike || {};
     for (const plant of PLANTS) {
-        // demand multiplier applied if a spike was requested for this plant
         const multiplier = 1 + (demandSpikeMap[plant.id] ? (parseFloat(demandSpikeMap[plant.id]) / 100) : 0);
 
         for (const mat of MATERIALS) {
@@ -634,13 +678,11 @@ function buildModel(vessels, rakes, inventory, dynamicConstraints = {}) {
             if (!baseDaily) continue;
 
             const daily = baseDaily * multiplier;
-
             const currentInv = inventory[plant.id]?.[mat.id]?.currentLevel || 0;
             const safetyStock = daily * plant.safetyStockDays;
             const deficit = Math.max(0, safetyStock - currentInv);
 
             if (deficit > 0) {
-                // Make the required minimum deliveries proportional to the increased demand
                 model.constraints[`plant_${plant.id}_${mat.id}_recv`] = { min: Math.ceil(deficit * 0.5) };
             }
         }
@@ -660,13 +702,10 @@ function solveModel(model) {
     return { feasible: false };
 }
 
-/**
- * Greedy interpretation for interpretSolution compatibility
- */
 function fallbackSolveInterpreted(vessels, rakes, inventory, dynamicConstraints) {
     const solution = { feasible: true, result: 0 };
-    vessels.forEach((_, i) => solution[`berth_${i}`] = 1);
-    rakes.forEach((_, i) => solution[`rail_${i}`] = 1);
+    vessels.forEach((_, i) => { solution[`berth_${i}`] = 1; });
+    rakes.forEach((_, i) => { solution[`rail_${i}`] = 1; });
     return interpretSolution(solution, vessels, rakes, inventory, dynamicConstraints);
 }
 
@@ -697,7 +736,6 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
         const freight = v.freightCost || Math.round(v.quantity * COST_PARAMS.freightCostPerTon * COST_PARAMS.usdToInr);
         const handling = port ? (port.handlingCost || 320) * v.quantity : 320 * v.quantity;
         
-        // --- 🟢 Fix: Ensure interpretSolution uses the SAME mlDelay as the solver ---
         let mlDelay = 0;
         if (predictor && predictor.trained) {
             try {
@@ -728,7 +766,7 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
             material: v.materialName,
             quantity: v.quantity,
             eta: v.actualETA,
-            delayHours: (v.delayHours || 0) + mlDelay, // Total delay (Initial + ML)
+            delayHours: (v.delayHours || 0) + mlDelay,
             predictedDelay: mlDelay,
             assigned,
             freight,
@@ -762,9 +800,6 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
         });
     });
 
-    // --- 🟢 Fix: Industrial Shortfall Penalties ---
-    // In a simulation, if we cancel a train, the "cost" of the plan drops.
-    // We must add a penalty for the "missing" material to reflect operational reality.
     let shortfallPenalties = 0;
     for (const plant of PLANTS) {
         for (const mat of MATERIALS) {
@@ -774,7 +809,6 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
             const currentInv = inventory[plant.id]?.[mat.id]?.currentLevel || 0;
             const safetyStock = daily * plant.safetyStockDays;
             
-            // Total expected delivery to this plant for this material
             const totalDelivered = results.railPlan
                 .filter(r => r.to === plant.id && r.material === mat.id && r.used)
                 .reduce((sum, r) => sum + r.quantity, 0);
@@ -783,11 +817,9 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
             
             if (endBalance < safetyStock) {
                 const deficit = safetyStock - endBalance;
-                // Reuse Dynamic Mathematician logic for shortfall
                 const baseCost = results.totalCost / (sum(vessels.map(v => v.quantity)) || 1);
                 const avgTransportCost = Math.max(1200, Math.min(2500, baseCost)); 
-                const mRisk = 2.5 + (mlDelay / 12) + (monsoonPenalty - 1);
-                
+                const mRisk = 2.5;
                 shortfallPenalties += Math.round(deficit * (avgTransportCost * mRisk));
             }
         }
@@ -796,13 +828,11 @@ export function interpretSolution(solution, vessels, rakes, inventory, dynamicCo
     results.costBreakdown.penalties = (results.costBreakdown.penalties || 0) + shortfallPenalties;
     results.totalCost = sum(Object.values(results.costBreakdown));
 
-    // --- 🟢 Fix: Mathematical & Logical Precision ---
     const rawTotalCost = results.totalCost - shortfallPenalties; 
-    const calculatedBaseline = rawTotalCost * 1.18; // 18% inefficiency assumption
+    const calculatedBaseline = rawTotalCost * 1.18;
     const pctSaved = Math.max(0, ((calculatedBaseline - results.totalCost) / calculatedBaseline) * 100);
     const demurragePct = results.costBreakdown.demurrage > 0 ? 32.5 : 0; 
     
-    // Dynamic Reliability Score
     const onTimeCount = results.vesselSchedule.filter(v => v.delayHours < 24).length;
     const reliability = results.vesselSchedule.length > 0 ? (onTimeCount / results.vesselSchedule.length) * 100 : 85;
 
@@ -856,16 +886,13 @@ export function reOptimize(vessels, rakes, inventory, modifications = {}) {
         const { portId, days } = modifications.portClosure;
         const targetPortId = String(portId).toLowerCase();
         
-        constraints.portCapacityFactor = 0; // Close the port
+        constraints.portCapacityFactor = 0;
         modifiedVessels = modifiedVessels.map(v => {
             const vPort = String(v.destinationPort || v.portId || v.port || '').toLowerCase();
             if (vPort === targetPortId || vPort.includes(targetPortId)) {
-                // Reroute vessels - find another port
                 const otherPorts = PORTS.filter(p => !String(p.id).toLowerCase().includes(targetPortId));
                 const newPort = otherPorts[Math.floor(Math.random() * otherPorts.length)];
-                
-                // MATH: Delay is proportional to closure duration + rerouting overhead
-                const rerouteDelay = 12; // 12h overhead for rerouting
+                const rerouteDelay = 12;
                 const totalDelay = (days * 24) + rerouteDelay;
                 
                 return {

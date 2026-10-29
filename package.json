@@ -4,13 +4,21 @@
   "main": "index.js",
   "scripts": {
     "start": "node backend/server.js",
+    "ml-service": "python ml/service.py --server --port 5001",
+    "ml-train": "python ml/service.py --train",
+    "test-ml": "python tests/test_ml_integration.py",
     "frontend-only": "node js/debug_server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/test_api_integration.js"
   },
-  "keywords": [],
+  "keywords": [
+    "vessel-delay-prediction",
+    "logistics-optimization",
+    "milp",
+    "voting-regressor"
+  ],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "BharatSupply Port-to-Plant Logistics & Multi-Source Vessel Delay Prediction System",
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",

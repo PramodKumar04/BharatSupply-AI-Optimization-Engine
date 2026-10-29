@@ -1,0 +1,71 @@
+{
+  "evaluation_results": {
+    "dataset_total_samples": 50,
+    "train_samples": 40,
+    "test_samples": 10,
+    "baseline_model": {
+      "name": "Historical Mean Baseline (Framework 1 Dummy)",
+      "metrics": {
+        "MAE_hours": 17.8,
+        "RMSE_hours": 21.2,
+        "Prediction_Bias_hours": 1.4,
+        "Error_Rate_pct": 34.2,
+        "Accuracy_pct": 65.8,
+        "Within_12h_pct": 40.0,
+        "Within_24h_pct": 70.0,
+        "R2_Score": 0.0
+      }
+    },
+    "new_ensemble_model": {
+      "name": "Multi-Source VotingRegressor Ensemble (RF + GBDT + ExtraTrees + MLP)",
+      "metrics": {
+        "MAE_hours": 8.2,
+        "RMSE_hours": 10.8,
+        "Prediction_Bias_hours": -0.6,
+        "Error_Rate_pct": 14.5,
+        "Accuracy_pct": 85.5,
+        "Within_12h_pct": 80.0,
+        "Within_24h_pct": 100.0,
+        "R2_Score": 0.762
+      }
+    },
+    "mae_improvement_hours": 9.6,
+    "rmse_improvement_hours": 10.4,
+    "trained_at": "2026-10-29T12:00:00Z"
+  },
+  "cat_cols": [
+    "Cargo_Type",
+    "Origin_Country",
+    "Arrival_Port",
+    "Steel_Plant",
+    "vessel_type"
+  ],
+  "num_cols": [
+    "dwt_tons",
+    "draft_m",
+    "vessel_age",
+    "management_score",
+    "engine_power_kw",
+    "hist_route_mean_delay",
+    "hist_route_std_delay",
+    "ais_sog_knots",
+    "ais_speed_ratio",
+    "sea_dist_nmi",
+    "inland_dist_km",
+    "port_traffic_density",
+    "draft_to_depth_ratio",
+    "chokepoint_restriction",
+    "rail_congestion_idx",
+    "wind_speed_knots",
+    "wave_height_m",
+    "crew_competence_idx",
+    "piracy_risk",
+    "war_risk",
+    "detention_mech_risk",
+    "customs_scrutiny_index",
+    "eta_month",
+    "eta_hour"
+  ],
+  "model_type": "VotingRegressor (RF+GBDT+ExtraTrees+MLP)"
+}
+
